@@ -1,0 +1,45 @@
+# Sunshine 官方镜像 rootful podman 服务（Quadlet 声明式）
+# podman 自带 systemd generator：daemon-reload 时把本文件生成系统服务 sunshine.service。
+# 安装: ./install.sh  卸载: ./install.sh --uninstall
+
+[Unit]
+Description=Sunshine game stream host (rootful podman, KMS capture)
+# 开机后若短暂 inactive(排队) 是 network-online.target 等待期（本机约 2 分钟），属正常
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=docker.io/lizardbyte/sunshine:latest-ubuntu-24.04
+ContainerName=sunshine
+Network=host
+# KMS/DRM 捕获需要初始命名空间 CAP_SYS_ADMIN，root 容器内以 root 运行（--user 0:0）
+User=0:0
+AddCapability=CAP_SYS_ADMIN CAP_SYS_NICE
+# --ipc=host（MIT-SHM 性能）；放开 seccomp（默认 profile 会拦部分 DRM ioctl）
+PodmanArgs=--ipc=host --security-opt seccomp=unconfined
+# 无头容器 Qt 走 offscreen，避免托盘初始化失败拖垮主循环
+Timezone=Asia/Shanghai
+Environment=QT_QPA_PLATFORM=offscreen
+# 配置目录（root 服务数据放系统目录）
+Volume=/var/lib/sunshine-podman:/home/lizard/.config/sunshine
+# GPU（NVIDIA CDI；无 CDI 的机器改成 AddDevice=/dev/dri/card0 AddDevice=/dev/dri/renderD128）
+AddDevice=nvidia.com/gpu=all
+# 虚拟手柄 / 输入
+AddDevice=/dev/uinput
+AddDevice=/dev/input
+# 桌面会话挂载：登录后才存在；未登录时容器启动失败由 Restart 重试，登录后自动成功
+Volume=/run/user/1000/wayland-0:/run/user/1000/wayland-0
+Volume=/run/user/1000/bus:/run/user/1000/bus
+Volume=/run/user/1000/pipewire-0:/run/user/1000/pipewire-0
+Volume=/run/user/1000/pipewire-0:/tmp/pipewire-0
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus"
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=PIPEWIRE_RUNTIME_DIR=/tmp
+
+[Service]
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
