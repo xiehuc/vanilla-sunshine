@@ -1,0 +1,18 @@
+[Unit]
+Description=Sunshine game stream host (official image via rootful podman, KMS capture)
+Documentation=https://docs.lizardbyte.dev/projects/sunshine/master/md_DOCKER__README.html
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 系统级服务本身就以 root 运行，脚本里无需再提权
+Environment=SUNSHINE_ELEVATE=none
+Environment=TZ=Asia/Shanghai
+ExecStart=/home/xiehuc/vanilla-sunshine-podman/run.sh fg
+ExecStop=/home/xiehuc/vanilla-sunshine-podman/run.sh stop
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
