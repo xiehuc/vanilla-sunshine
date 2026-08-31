@@ -5,6 +5,7 @@ sunshine 提供了多种安装方式，但是在 vanillaOS/Fedora Silverblue 等
 1. deb 安装方式：vanilla 的 abroot 不支持本地deb包，故排除。
 2. flatpak 方式：商店里面天然有，好安装。但不支持KMS捕获。新版本增加了XDG-Portal的捕获方式，天然支持wayland。但这个方式也很坑，首先是新屏幕需要授权，其次是显示器关机了，edid虚拟屏，DP诱骗器都没有信号。以前还有复制bwrap出来设置cap admin的方式绕过去。现在也封得差不多了。
 3. docker方式：官方文档说不推荐（但实际上这个才是正解）
+4. ps. 如果是接的电视：可以在设置（Gnome3）--电源--节电 里面关闭自动熄屏。这样就算电视关了。也可以串流，省去了弄一个虚拟显示器的方式。
 
 该项目帮助安装一个root（为了KMS）的docker来启动sunshine。
 
