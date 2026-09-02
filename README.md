@@ -43,6 +43,7 @@ rootless podman 的 user namespace 里 `--cap-add=SYS_ADMIN` 只是 userns 内�
 ## 目录内容
 
 - `sunshine.container` + `install.sh` — Quadlet 声明文件，装成系统级 systemd 服务（开机自启）
+- `force-connector.sh` — 串流前"强开 DRM 端口"的检查脚本（install.sh 拷入配置目录）
 - `README.md` — 本文件
 
 ## 快速开始（推荐：systemd 服务方式）
@@ -71,6 +72,57 @@ SSH / 无 polkit 授权代理的环境用 run0（终端交互输密码）：
 ```bash
 SUNSHINE_ELEVATE=run0 ./install.sh --restart
 ```
+
+### 串流前"强开"DRM 端口（可选）
+
+某些场景（如电视已断电、但还想串流）显示器没有有效信号，KMS 捕获会失败。
+解决办法是让 Sunshine 在**每次串流开始前**强制内核把目标 connector 视为已连接：
+
+```bash
+echo on > /sys/class/drm/card0-HDMI-A-1/status
+```
+
+`install.sh` 安装时会**交互列出宿主机可用的 DRM 端口**（`/sys/class/drm/card*-*/status`，
+含当前状态）让你选择强开哪个，也可以选「0=不开」。覆盖两种场景：
+
+| 场景 | 机制 |
+|------|------|
+| 电视关着 → 启动服务 | `sunshine.service` 的 **drop-in `ExecStartPre`**：容器起来前在宿主跑 `force-connector.sh <host 路径>`，把所选 connector 强开，sunshine 初始化 KMS 时就能看到显示 |
+| 服务开着 → 关电视再串流 | `sunshine.conf` 的 `global_prep_cmd`：每次串流前在容器内调 `force-connector.sh`（默认走 rw bind 的 `/connector-status`）强开 |
+
+为什么强开脚本要能传路径参数、且启动时用的是 drop-in 而不是直接塞进 `sunshine.container`：
+`ExecStartPre` 只能挂在 systemd **service** 单元上，而 quadlet 每次 daemon-reload 都自动从
+`sunshine.container` 生成该 service，且**不支持**在 `.container` 里写 `ExecStartPre`，所以用一个
+drop-in 文件（`/etc/systemd/system/sunshine.service.d/force-connector.conf`）叠加上去是标准做法。
+服务启动那一刻容器还没起来、没有 `/connector-status`，所以 drop-in 给脚本传宿主的真实 sysfs 路径
+`/sys/class/drm/<端口>/status`；而串流时脚本在容器内默认走 `/connector-status`。
+
+具体配置：
+
+1. `sunshine.container` 里用占位符 `@CONNECTOR@` 写的 bind 行，由 install.sh 用 `sed`
+   替换成所选 connector（选「不开」则整行删除）：把该接口的 `status` 以 **rw** 挂进容器，
+   挂到固定路径 `/connector-status`（不覆盖容器里只读的 `/sys`）。
+2. `force-connector.sh` 被拷进配置目录并随挂载进容器
+   （`/var/lib/sunshine-podman/force-connector.sh` → `/home/lizard/.config/sunshine/force-connector.sh`）。
+   脚本逻辑：**先读 `/connector-status`，仅当值为 `disconnected` 时才写 `on`**，写完 `sleep 2`
+   等内核热插拔/捕获线程重检测；已是 connected 或读不到则不动，绝不把正常输出关掉。
+3. 全局钩子（`global_prep_cmd` 是 Sunshine 较新版本——本机 2026.830——内置的
+   "所有应用串流前/后命令"钩子），install.sh 会往 `sunshine.conf` 写入：
+
+   ```ini
+   global_prep_cmd = [{"do":"/bin/sh /home/lizard/.config/sunshine/force-connector.sh","undo":""}]
+   ```
+
+   于是每次串流开始前 Sunshine 都会先跑一遍检查。脚本 exit 非 0 会中止启动，脚本本身
+   保证安静成功退出（disconnected 才写、写不进去也直接 exit 0）。
+
+> 注：`sunshine.conf` 由 Web UI 管理，若你在 Web UI 里改了设置它可能被整体重写；设置通常在
+> Advanced 里也有对应项，或重跑一次 `./install.sh` 即可重新写入。
+>
+> 非交互/CI 环境用环境变量跳过询问：`SUNSHINE_FORCE_CONNECTOR=card0-HDMI-A-1`（空串=不开）。
+>
+> 验证：串流一次后看 `run0 journalctl -u sunshine.service` 应出现 `Executing Do Cmd: ...force-connector.sh`；
+> 或 `run0 podman exec sunshine cat /connector-status` 确认读到。
 
 > Quadlet 是 podman 自带的 systemd generator：`sunshine.container` 放进
 > `/etc/containers/systemd/` 后，`daemon-reload` 即自动生成系统服务 **`sunshine.service`**

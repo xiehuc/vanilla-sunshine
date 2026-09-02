@@ -36,6 +36,9 @@ Environment=WAYLAND_DISPLAY=wayland-0
 Environment="DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus"
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=PIPEWIRE_RUNTIME_DIR=/tmp
+# 强开 DRM 端口：install.sh 用 sed 把 @CONNECTOR@ 替换成所选 connector（选"不开"则整行删除）。
+# bind 后容器内以 rw 读写该 connector 的 status（固定路径 /connector-status，供 force-connector.sh 用）
+Volume=/sys/class/drm/@CONNECTOR@/status:/connector-status:rw
 
 [Service]
 Restart=on-failure
