@@ -87,6 +87,7 @@ echo on > /sys/class/drm/card0-HDMI-A-1/status
 
 | 场景 | 机制 |
 |------|------|
+| 开机时电视没开 → 自动登录失败 | `sunshine-display-on.service`（**Before gdm**）：GDM 启动前先在宿主 `echo on` 强开 connector，让 GDM 自动登录会话能起来（自动登录只在 GDM 启动瞬间判定一次；会话起不来就没有 uid1000 → 无 `/run/user/1000/wayland-0` → 容器创建失败） |
 | 电视关着 → 启动服务 | `sunshine.service` 的 **drop-in `ExecStartPre`**：容器起来前在宿主跑 `force-connector.sh <host 路径>`，把所选 connector 强开，sunshine 初始化 KMS 时就能看到显示 |
 | 服务开着 → 关电视再串流 | `sunshine.conf` 的 `global_prep_cmd`：每次串流前在容器内调 `force-connector.sh`（默认走 rw bind 的 `/connector-status`）强开 |
 

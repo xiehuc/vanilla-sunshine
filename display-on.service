@@ -1,0 +1,34 @@
+# 开机时在 GDM 之前强开 DRM 端口（root 系统服务，非容器）
+#
+# 背景：自动登录只在 GDM 启动瞬间判定一次。若开机时电视/显示器没开
+# （connector 无有效信号），GDM 自动登录会话起不来 → 没有 uid1000 桌面
+# 会话 → /run/user/1000/wayland-0 不存在 → rootful sunshine 容器创建失败
+# （statfs: no such file），无限重启。
+#
+# 本服务：在 gdm.service 之前执行 `echo on` 到所选 connector 的 status，
+# 触发内核重新探测/输出，让 GDM 自动登录时能看到有效显示输出。
+# install.sh 会用 sed 把 @CONNECTOR@ 替换成所选端口（card0-HDMI-A-1 等）。
+#
+# 安装: ./install.sh    卸载: ./install.sh --uninstall
+# 手动: run0 install -m 644 display-on.service /etc/systemd/system/ \
+#       && run0 systemctl daemon-reload && run0 systemctl enable --now display-on.service
+
+[Unit]
+Description=Force DRM connector @CONNECTOR@ on before GDM auto-login
+# 必须在 GDM 自动登录判定之前完成（自动登录只在 gdm 启动时判一次）
+Before=gdm.service display-manager.service graphical.target
+# nvidia-drm 初始化后才可能有该 connector
+After=systemd-modules-load.service
+# 开机时该 connector 不存在（如驱动未就绪/换卡）则跳过，不阻塞启动
+ConditionPathExists=/sys/class/drm/@CONNECTOR@/status
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# 写 on 触发内核重新探测该 connector（写失败静默继续，绝不阻塞开机）
+ExecStart=/bin/sh -c 'echo on > /sys/class/drm/@CONNECTOR@/status 2>/dev/null || true'
+# 给内核完成热插拔/重检测的时间，让 GDM 自动登录能看到有效输出
+ExecStartPost=/bin/sleep 3
+
+[Install]
+WantedBy=graphical.target

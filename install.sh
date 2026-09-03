@@ -44,6 +44,12 @@ GP_LINE='global_prep_cmd = [{"do":"/bin/sh /home/lizard/.config/sunshine/force-c
 DROPIN_DIR="/etc/systemd/system/$SERVICE.d"
 DROPIN="$DROPIN_DIR/force-connector.conf"
 
+# 开机前置服务：在 GDM 启动前强开 connector，保证自动登录会话能起来
+# （自动登录只在 GDM 启动瞬间判定；无有效显示输出时桌面会话起不来，
+#   uid1000 会话缺失 -> /run/user/1000/wayland-0 不存在 -> 容器创建失败）
+DISPLAY_ON_SRC="$SCRIPT_DIR/display-on.service"
+DISPLAY_ON_DST="/etc/systemd/system/sunshine-display-on.service"
+
 ELEVATE="${SUNSHINE_ELEVATE:-run0}"
 case "$ELEVATE" in
   run0)   ELEV="run0" ;;
@@ -55,6 +61,7 @@ esac
 command -v systemctl >/dev/null || { echo "错误: 找不到 systemctl"; exit 1; }
 [ -f "$QUADLET_SRC" ] || { echo "错误: 找不到 $QUADLET_SRC"; exit 1; }
 [ -f "$FORCE_SCRIPT" ] || { echo "错误: 找不到 $FORCE_SCRIPT"; exit 1; }
+[ -f "$DISPLAY_ON_SRC" ] || { echo "错误: 找不到 $DISPLAY_ON_SRC"; exit 1; }
 if [ -n "$ELEV" ]; then
   command -v "$ELEV" >/dev/null || { echo "错误: 找不到提权命令 $ELEV"; exit 1; }
 fi
@@ -145,7 +152,8 @@ case "${1:-}" in
     echo "==> 卸载（提权: $ELEVATE）"
     ROOT="set -euo pipefail
 systemctl disable --now $SERVICE 2>/dev/null || true
-rm -f $QUADLET_DST $CONFIG_DIR/force-connector.sh $DROPIN
+systemctl disable --now sunshine-display-on.service 2>/dev/null || true
+rm -f $QUADLET_DST $CONFIG_DIR/force-connector.sh $DROPIN $DISPLAY_ON_DST
 rmdir $DROPIN_DIR 2>/dev/null || true
 # 从 sunshine.conf 移除 global_prep_cmd（保留其余配置）
 sed -i '/^[[:space:]]*global_prep_cmd[[:space:]]*=/d' $SUNSHINE_CONF 2>/dev/null || true
@@ -162,9 +170,9 @@ systemctl daemon-reload
     choose_connector
 
     # ---------- 生成部署内容（均为非 root 可读文件，逻辑集中在普通 shell） ----------
-    TMP_CONTAINER="$(mktemp)"; TMP_CONF="$(mktemp)"; TMP_SCRIPT="$(mktemp)"; TMP_DROPIN="$(mktemp)"
-    trap 'rm -f "$TMP_CONTAINER" "$TMP_CONF" "$TMP_SCRIPT" "$TMP_DROPIN"' EXIT
-    chmod 644 "$TMP_CONTAINER" "$TMP_CONF" "$TMP_DROPIN"; chmod 755 "$TMP_SCRIPT"
+    TMP_CONTAINER="$(mktemp)"; TMP_CONF="$(mktemp)"; TMP_SCRIPT="$(mktemp)"; TMP_DROPIN="$(mktemp)"; TMP_DISPLAY_ON="$(mktemp)"
+    trap 'rm -f "$TMP_CONTAINER" "$TMP_CONF" "$TMP_SCRIPT" "$TMP_DROPIN" "$TMP_DISPLAY_ON"' EXIT
+    chmod 644 "$TMP_CONTAINER" "$TMP_CONF" "$TMP_DROPIN" "$TMP_DISPLAY_ON"; chmod 755 "$TMP_SCRIPT"
 
     # 1) sunshine.container：sed 替换 @CONNECTOR@，或删掉该 bind 行
     if [ -n "$FORCE_CONNECTOR" ]; then
@@ -202,6 +210,16 @@ systemctl daemon-reload
       echo "    已生成启动时强开 drop-in（$FORCE_CONNECTOR）"
     fi
 
+    # 5) 开机前置服务：GDM 启动前强开 connector（替换 @CONNECTOR@）。
+    #    解决"开机时电视没开 -> GDM 自动登录失败 -> uid1000 会话缺失 ->
+    #    /run/user/1000/wayland-0 不存在 -> 容器创建失败"的整条链路。
+    if [ -n "$FORCE_CONNECTOR" ]; then
+      sed "s/@CONNECTOR@/$FORCE_CONNECTOR/g" "$DISPLAY_ON_SRC" > "$TMP_DISPLAY_ON"
+      echo "    已生成开机前置强开服务（$DISPLAY_ON_DST，Before gdm）"
+    else
+      : > "$TMP_DISPLAY_ON"   # 未选择端口：占位空文件，root 段据此卸载旧服务
+    fi
+
     # ---------- root 步骤（一次提权） ----------
     ROOT="set -euo pipefail
 mkdir -p $CONFIG_DIR
@@ -211,8 +229,12 @@ if [ -n '$FORCE_CONNECTOR' ]; then
   mkdir -p '$DROPIN_DIR'
   install -m 644 -o root -g root '$TMP_SCRIPT' '$CONFIG_DIR/force-connector.sh'
   install -m 644 -o root -g root '$TMP_DROPIN' '$DROPIN'
+  install -m 644 -o root -g root '$TMP_DISPLAY_ON' '$DISPLAY_ON_DST'
+  systemctl daemon-reload
+  systemctl enable sunshine-display-on.service 2>&1 | sed 's/^/    /' || true
+  systemctl start sunshine-display-on.service 2>&1 | sed 's/^/    /' || true
 else
-  rm -f '$CONFIG_DIR/force-connector.sh' '$DROPIN'
+  rm -f '$CONFIG_DIR/force-connector.sh' '$DROPIN' '$DISPLAY_ON_DST'
   rmdir '$DROPIN_DIR' 2>/dev/null || true
 fi
 systemctl daemon-reload
@@ -230,6 +252,7 @@ systemctl restart $SERVICE
     echo "      若 abroot 切 root 后服务消失，重跑本脚本即可。"
     if [ -n "$FORCE_CONNECTOR" ]; then
       echo "强开 $FORCE_CONNECTOR:"
+      echo "  - 开机时 GDM 之前强开（sunshine-display-on.service，Before gdm）→ 保证自动登录会话能起"
       echo "  - 服务启动时宿主先 echo on（drop-in ExecStartPre）→ 解决电视关着启动服务"
       echo "  - 串流前 global_prep_cmd 调 force-connector.sh（disconnected 才 on + sleep）→ 解决运行中关电视"
     fi
